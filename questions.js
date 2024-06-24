@@ -37,4 +37,4 @@ let questions = [
   "What is your favorite Disney movie and what makes it special to you?",
 ];
 
-export { questions };
+export default questions;

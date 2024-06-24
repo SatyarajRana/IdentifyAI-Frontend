@@ -1,24 +1,35 @@
-const http = require("http");
-const express = require("express");
-const socketio = require("socket.io");
+// const http = require("http");
+// const express = require("express");
+// const socketio = require("socket.io");
+// const questions = require("./questions");
+import http from "http";
+import express from "express";
+import { Server } from "socket.io";
+import questions from "./questions.js";
 
 const app = express();
 const expressServer = http.createServer(app);
-const io = socketio(expressServer, {
+const io = new Server(expressServer, {
   cors: {
     origin: ["http://localhost:3000"],
     methods: ["GET", "POST"],
   },
 });
+// const io = socketio(expressServer, {
+//   cors: {
+//     origin: ["http://localhost:3000"],
+//     methods: ["GET", "POST"],
+//   },
+// });
 
 expressServer.listen(8081, () => {
   console.log("listening on 8081");
 });
 
-// Namespace for managing waitlist and grouping
 const waitroom = io.of("/waitroom");
 
 const waitlist = [];
+const roomRounds = {};
 
 waitroom.on("connection", (socket) => {
   console.log("Someone has connected to waitroom");
@@ -29,13 +40,18 @@ waitroom.on("connection", (socket) => {
     if (waitlist.length == 3) {
       const group = waitlist.splice(0, 4);
       const roomId = `room-${Date.now()}`;
+      const randomQuestions = questions
+        .sort(() => 0.5 - Math.random())
+        .slice(0, 3);
 
+      roomRounds[roomId] = {
+        round: 1,
+        questions: randomQuestions,
+        timer: null,
+      };
       group.forEach((user) => {
-        // user.join(roomId);
-        user.emit("grouped", roomId);
+        user.emit("grouped", { roomId, questions: randomQuestions });
       });
-
-      // io.to(roomId).emit("startChat", roomId);
     }
   });
 
@@ -70,6 +86,12 @@ chatroom.on("connection", (socket) => {
   socket.on("joinRoom", (roomId) => {
     console.log("User joined chatroom", roomId);
     socket.join(roomId);
+    const room = chatroom.adapter.rooms.get(roomId);
+    if (room.size == 3) {
+      console.log("Room is full");
+      console.log(roomId);
+      startRound(roomId);
+    }
   });
 
   // socket.on("getAllRooms", () => {
@@ -83,3 +105,34 @@ chatroom.on("connection", (socket) => {
     console.log("User disconnected from chatroom");
   });
 });
+function startRound(roomId) {
+  console.log("Starting round");
+  console.log("Room ID", roomId);
+  const roomData = roomRounds[roomId];
+  if (!roomData) return;
+  console.log("Room data", roomData);
+  const { round, questions } = roomData;
+
+  // Notify clients about the new round
+  chatroom.to(roomId).emit("newRound", { round });
+
+  // Set a timer to end the round after 30 seconds
+  roomData.timer = setTimeout(() => endRound(roomId), 10000);
+}
+
+function endRound(roomId) {
+  const roomData = roomRounds[roomId];
+  if (!roomData) return;
+
+  clearTimeout(roomData.timer);
+  roomData.round += 1;
+
+  if (roomData.round > roomData.questions.length) {
+    // All rounds are complete
+    chatroom.to(roomId).emit("endGame");
+    delete roomRounds[roomId]; // Clean up room data
+  } else {
+    // Start the next round
+    startRound(roomId);
+  }
+}
