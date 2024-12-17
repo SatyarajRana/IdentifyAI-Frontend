@@ -1,7 +1,3 @@
-// const http = require("http");
-// const express = require("express");
-// const socketio = require("socket.io");
-// const questions = require("./questions");
 import http from "http";
 import express from "express";
 import { Server } from "socket.io";
@@ -15,12 +11,6 @@ const io = new Server(expressServer, {
     methods: ["GET", "POST"],
   },
 });
-// const io = socketio(expressServer, {
-//   cors: {
-//     origin: ["http://localhost:3000"],
-//     methods: ["GET", "POST"],
-//   },
-// });
 
 expressServer.listen(8081, () => {
   console.log("listening on 8081");
@@ -36,18 +26,23 @@ waitroom.on("connection", (socket) => {
 
   socket.on("join", () => {
     waitlist.push(socket);
-    // console.log("User joined waitlist");
+    console.log("User joined waitlist");
     if (waitlist.length == 3) {
+      console.log("Grouping users");
+
       const group = waitlist.splice(0, 4);
       const roomId = `room-${Date.now()}`;
       const randomQuestions = questions
         .sort(() => 0.5 - Math.random())
         .slice(0, 3);
 
+      const ai_response = "This is AI's response!!";
       roomRounds[roomId] = {
         round: 1,
         questions: randomQuestions,
         timer: null,
+        ai_response: ai_response,
+        users: [],
       };
       group.forEach((user) => {
         user.emit("grouped", { roomId, questions: randomQuestions });
@@ -77,16 +72,26 @@ chatroom.on("connection", (socket) => {
   socket.on("chatMessage", (data) => {
     console.log("Received chat message", data);
     const { roomId, message, username } = data;
-    // console.log("roomId", roomId);
-    // console.log("message", message);
-    console.log("username", username);
+
     chatroom.to(roomId).emit("chatMessage", { message, username });
   });
 
-  socket.on("joinRoom", (roomId) => {
-    console.log("User joined chatroom", roomId);
+  socket.on("joinRoom", (data) => {
+    const { roomId, username } = data;
+
     socket.join(roomId);
     const room = chatroom.adapter.rooms.get(roomId);
+    // let roomData = roomRounds[roomId];
+
+    const socketId = socket.id;
+    // roomData.users[username] = socketId;
+    roomRounds[roomId].users.push({
+      username,
+      socketId,
+      kicked: false,
+      votes: 0,
+    });
+
     if (room.size == 3) {
       console.log("Room is full");
       console.log(roomId);
@@ -101,23 +106,33 @@ chatroom.on("connection", (socket) => {
   //   // socket.emit("allRooms", rooms);
   // });
 
+  socket.on("voted", (data) => {
+    console.log("Received vote", data);
+    const { roomId, username, votedFor } = data;
+    const roomData = roomRounds[roomId];
+    if (!roomData) return;
+
+    const user = roomData.users.find((user) => user.socketId === votedFor);
+    if (!user) return;
+
+    user.votes += 1;
+    console.log("User", user.username, "has", user.votes, "votes");
+  });
+
   socket.on("disconnect", () => {
     console.log("User disconnected from chatroom");
   });
 });
 function startRound(roomId) {
-  console.log("Starting round");
-  console.log("Room ID", roomId);
   const roomData = roomRounds[roomId];
   if (!roomData) return;
-  console.log("Room data", roomData);
-  const { round, questions } = roomData;
+  const { round, questions, ai_response } = roomData;
 
-  // Notify clients about the new round
   chatroom.to(roomId).emit("newRound", { round });
 
-  // Set a timer to end the round after 30 seconds
-  roomData.timer = setTimeout(() => endRound(roomId), 10000);
+  roomData.timer = setTimeout(() => sendAIResponse(roomId, ai_response), 5000);
+  roomData.timer = setTimeout(() => sendVotingRequest(roomId), 30000);
+  // roomData.timer = setTimeout(() => endRound(roomId), 30000);
 }
 
 function endRound(roomId) {
@@ -135,4 +150,17 @@ function endRound(roomId) {
     // Start the next round
     startRound(roomId);
   }
+}
+
+function sendAIResponse(roomId, ai_response) {
+  chatroom.to(roomId).emit("chatMessage", {
+    message: ai_response,
+    username: "Jonathan",
+  });
+}
+function sendVotingRequest(roomId) {
+  const roomData = roomRounds[roomId];
+  if (!roomData) return;
+  const { round, questions, ai_response, users } = roomData;
+  chatroom.to(roomId).emit("votingRequest", { users });
 }
